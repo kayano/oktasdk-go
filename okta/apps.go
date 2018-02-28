@@ -6,16 +6,29 @@ import (
 	"time"
 )
 
+const (
+	// AppStatusActive is a  constant to represent OKTA App Status returned by the API
+	AppStatusActive = "ACTIVE"
+	// AppStatusInActive is a  constant to represent OKTA App Status returned by the API
+	AppStatusInActive = "INACTIVE"
+
+	appStatusFilter = "status"
+)
+
 // AppsService is a service to retreives applications from OKTA.
 type AppsService service
 
 // AppFilterOptions is used to generate a "Filter" to search for different Apps
 // The values here coorelate to API Search paramgters on the group API
 type AppFilterOptions struct {
+	// This will be built by internal - may not need to export
+	FilterString  string   `url:"filter,omitempty"`
 	NextURL       *url.URL `url:"-"`
 	GetAllPages   bool     `url:"-"`
 	NumberOfPages int      `url:"-"`
 	Limit         int      `url:"limit,omitempty"`
+
+	StatusEqualTo string `url:"-"`
 }
 
 // App is the Model for an OKTA Application
@@ -241,4 +254,66 @@ func (a *AppsService) GetUsers(appID string, opt *AppFilterOptions) (appUsers []
 	}
 
 	return appUsers, resp, err
+}
+
+func (s *AppsService) ListWithFilter(opt *AppFilterOptions) ([]App, *Response, error) {
+	var u string
+	var err error
+
+	pagesRetreived := 0
+	if opt.NextURL != nil {
+		u = opt.NextURL.String()
+	} else {
+		if opt.StatusEqualTo != "" {
+			opt.FilterString = appendToFilterString(opt.FilterString, appStatusFilter, FilterEqualOperator, opt.StatusEqualTo)
+		}
+
+		if opt.Limit == 0 {
+			opt.Limit = defaultLimit
+		}
+
+		u, err = addOptions("apps", opt)
+		if err != nil {
+			return nil, nil, err
+		}
+
+	}
+
+	req, err := s.client.NewRequest("GET", u, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	apps := make([]App, 1)
+	resp, err := s.client.Do(req, &apps)
+	if err != nil {
+		return nil, resp, err
+	}
+
+	pagesRetreived++
+
+	if (opt.NumberOfPages > 0 && pagesRetreived < opt.NumberOfPages) || opt.GetAllPages {
+		for {
+
+			if pagesRetreived == opt.NumberOfPages {
+				break
+			}
+			if resp.NextURL != nil {
+				var appPage []App
+				pageOption := new(AppFilterOptions)
+				pageOption.NextURL = resp.NextURL
+				pageOption.NumberOfPages = 1
+				pageOption.Limit = opt.Limit
+
+				appPage, resp, err = s.ListWithFilter(pageOption)
+				if err != nil {
+					return apps, resp, err
+				}
+				apps = append(apps, appPage...)
+				pagesRetreived++
+			} else {
+				break
+			}
+		}
+	}
+	return apps, resp, err
 }
